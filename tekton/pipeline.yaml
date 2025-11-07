@@ -1,0 +1,58 @@
+---
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: hermetic-build
+spec:
+  description: Pipeline that clones a repositoty, prefetches its dependencies and builds it hermetically
+  params:
+    - name: URL
+      description: Repository URL to clone from
+      type: string
+    - name: REF
+      description: Commit to checkout (branch, tag, sha, etc.)
+      type: string
+    - name: IMAGE
+      description: Reference of the image buildah will produce
+      type: string
+    - name: PREFETCH_INPUT
+      description: Configures project packages that will have their dependencies prefetched
+      type: string
+    - name: TARGET_ARTIFACT
+      description: The OCI repository where the artifacts will be stored
+      type: string
+  tasks:
+    - name: clone
+      taskRef:
+        name: git-clone
+      params:
+        - name: URL
+          value: $(params.URL)
+        - name: REF
+          value: $(params.REF)
+        - name: TARGET_ARTIFACT
+          value: $(params.TARGET_ARTIFACT)
+    - name: prefetch
+      taskRef:
+        name: prefetch-dependencies
+      params:
+        - name: SOURCE_ARTIFACT
+          value: $(tasks.clone.results.SOURCE_ARTIFACT)
+        - name: PREFETCH_INPUT
+          value: $(params.PREFETCH_INPUT)
+        - name: TARGET_ARTIFACT
+          value: $(params.TARGET_ARTIFACT)
+      runAfter:
+        - clone
+    - name: build
+      taskRef:
+        name: build
+      params:
+        - name: SOURCE_ARTIFACT
+          value: $(tasks.prefetch.results.SOURCE_ARTIFACT)
+        - name: PREFETCH_ARTIFACT
+          value: $(tasks.prefetch.results.PREFETCH_ARTIFACT)
+        - name: IMAGE
+          value: $(params.IMAGE)
+      runAfter:
+        - prefetch

@@ -1,0 +1,62 @@
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: prefetch-dependencies
+spec:
+  description: Prefetch build dependencies using Hermeto and push as artifacts
+  params:
+    - name: SOURCE_ARTIFACT
+      description: The Trusted Artifact URI pointing to the artifact with the application source code
+      type: string
+    - name: PREFETCH_INPUT
+      description: Configures project packages that will have their dependencies prefetched
+      type: string
+    - name: TARGET_ARTIFACT
+      description: The OCI repository where the artifacts will be stored
+      type: string
+  results:
+    - name: PREFETCH_ARTIFACT
+      description: The Trusted Artifact URI pointing to the artifact with the prefetched dependencies
+      type: string
+    - name: SOURCE_ARTIFACT
+      description: The Trusted Artifact URI pointing to the artifact with the modified source code
+      type: string
+  volumes:
+    - name: workdir
+      emptyDir: {}
+  steps:
+    - name: use-trusted-artifact
+      image: quay.io/konflux-ci/build-trusted-artifacts:latest@sha256:aa601d847eafa87747894b770eff43b47cffe2cc39059bb345ee58b378473b8f
+      args:
+        - use
+        - $(params.SOURCE_ARTIFACT)=/var/workdir/source
+      volumeMounts:
+        - mountPath: /var/workdir
+          name: workdir
+    - name: prefetch-dependencies
+      image: quay.io/konflux-ci/hermeto:0.41.0@sha256:c0c77f44407a094bbeccc9861b83ef0e7cd14220227d6842cd9a2ce1c8d98eaa
+      env:
+        - name: PARAM_PREFETCH_INPUT
+          value: $(params.PREFETCH_INPUT)
+      script: |
+        #!/bin/sh
+        set -ex
+
+        hermeto fetch-deps --source="/var/workdir/source" --output="/var/workdir/prefetch/output" --sbom-output-type="spdx" "${PARAM_PREFETCH_INPUT}"
+        hermeto generate-env "/var/workdir/prefetch/output" --format env --for-output-dir=/prefetch/output --output "/var/workdir/prefetch/prefetch.env"
+        hermeto inject-files "/var/workdir/prefetch/output" --for-output-dir=/prefetch/output
+      volumeMounts:
+        - mountPath: /var/workdir
+          name: workdir
+    - name: create-trusted-artifact
+      image: quay.io/konflux-ci/build-trusted-artifacts:latest@sha256:aa601d847eafa87747894b770eff43b47cffe2cc39059bb345ee58b378473b8f
+      args:
+        - create
+        - --store
+        - $(params.TARGET_ARTIFACT)
+        - $(results.SOURCE_ARTIFACT.path)=/var/workdir/source
+        - $(results.PREFETCH_ARTIFACT.path)=/var/workdir/prefetch
+      volumeMounts:
+        - mountPath: /var/workdir
+          name: workdir

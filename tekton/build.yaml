@@ -1,0 +1,109 @@
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: build
+spec:
+  description: Build container image using source code and prefetched dependencies
+  params:
+    - name: SOURCE_ARTIFACT
+      description: The Trusted Artifact URI pointing to the artifact with the cloned files
+      type: string
+    - name: PREFETCH_ARTIFACT
+      description: The Trusted Artifact URI pointing to the artifact with the prefetched files
+      type: string
+    - name: IMAGE
+      description: Reference of the image buildah will produce
+      type: string
+    - name: DOCKERFILE
+      description: Path to the Dockerfile to build
+      type: string
+      default: "Dockerfile"
+  results:
+  volumes:
+    - name: workdir
+      emptyDir: {}
+  steps:
+    - name: use-trusted-artifact
+      image: quay.io/konflux-ci/build-trusted-artifacts:latest@sha256:43d997ac61bef77eaee0413fe50c29b66eb4d0d32066f5bd4a83f39e4b2d9457
+      args:
+        - use
+        - $(params.SOURCE_ARTIFACT)=/var/workdir/source
+        - $(params.PREFETCH_ARTIFACT)=/var/workdir/prefetch
+      volumeMounts:
+        - mountPath: /var/workdir
+          name: workdir
+    - name: build
+      image: quay.io/konflux-ci/buildah-task:latest@sha256:27400eaf836985bcc35182d62d727629f061538f61603c05b85d5d99bfa7da2d
+      volumeMounts:
+        - mountPath: /var/workdir
+          name: workdir
+      workingDir: /var/workdir/source
+      env:
+        - name: PARAM_SOURCE_ARTIFACT
+          value: $(params.SOURCE_ARTIFACT)
+        - name: PARAM_PREFETCH_ARTIFACT
+          value: $(params.PREFETCH_ARTIFACT)
+        - name: PARAM_IMAGE
+          value: $(params.IMAGE)
+        - name: PARAM_DOCKERFILE
+          value: $(params.DOCKERFILE)
+        - name: PREFETCH_PATH
+          value: /var/workdir/prefetch
+        - name: SOURCE_PATH
+          value: /var/workdir/source
+      securityContext:
+        capabilities:
+          add:
+          - SETFCAP
+      script: |
+        #!/bin/sh
+        set -ex
+
+        dockerfile_path=$PARAM_DOCKERFILE
+        dockerfile_copy=$(mktemp --tmpdir "$(basename "$dockerfile_path").XXXXXX")
+        cp "$dockerfile_path" "$dockerfile_copy"
+
+        sed -E -i \
+          -e 'H;1h;$!d;x' \
+          -e 's@^\s*(run((\s|\\\n)+-\S+)*(\s|\\\n)+)@\1. /prefetch/prefetch.env \&\& \\\n    @igM' \
+          "$dockerfile_copy"
+
+        VOLUME_MOUNTS=()
+
+        cp -r "$PREFETCH_PATH" /tmp/
+        chmod -R go+rwX /tmp/prefetch
+        VOLUME_MOUNTS+=(--volume /tmp/prefetch:/prefetch)
+
+        buildah_cmd_array=(
+          buildah build
+          "${VOLUME_MOUNTS[@]}"
+          --tls-verify="true"
+          --no-cache
+          --ulimit nofile=4096:4096
+          --http-proxy=false
+          --network=none
+          -f "$dockerfile_copy" -t "$PARAM_IMAGE" .
+        )
+
+        buildah_cmd=$(printf "%q " "${buildah_cmd_array[@]}")
+
+        $buildah_cmd
+
+        buildah push \
+        --format=docker \
+        --retry 3 \
+        --tls-verify=true \
+        "$PARAM_IMAGE"
+    
+    - name: push-sbom
+      image: quay.io/konflux-ci/appstudio-utils:1610c1fc4cfc9c9053dbefc1146904a4df6659ef@sha256:90ac97b811073cb99a23232c15a08082b586c702b85da6200cf54ef505e3c50c
+      env:
+        - name: PARAM_IMAGE
+          value: $(params.IMAGE)
+      volumeMounts:
+        - mountPath: /var/workdir
+          name: workdir
+      script: |
+        ls /var/workdir/prefetch
+        cosign attach sbom --sbom /var/workdir/prefetch/output/bom.json --type "spdx" "$PARAM_IMAGE"

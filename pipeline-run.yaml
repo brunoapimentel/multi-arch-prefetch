@@ -1,0 +1,21 @@
+---
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  generateName: hermetic-build-run-
+spec:
+  pipelineRef:
+    name: hermetic-build
+  params:
+    - name: URL
+      value: "https://github.com/brunoapimentel/sample-nodejs-app.git"
+    - name: REF
+      value: "main"
+    - name: IMAGE
+      value: "quay.io/bpimente/test-images:multi-arch-test"
+    - name: PREFETCH_INPUT
+      value: "npm"
+    - name: TARGET_ARTIFACT
+      value: "quay.io/bpimente/test-images"
+  taskRunTemplate:
+    serviceAccountName: registry-credentials
