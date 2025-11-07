@@ -8,13 +8,13 @@ spec:
     name: hermetic-build
   params:
     - name: URL
-      value: "https://github.com/brunoapimentel/sample-nodejs-app.git"
+      value: "https://github.com/brunoapimentel/pip-cryptography-sample"
     - name: REF
       value: "main"
     - name: IMAGE
       value: "quay.io/bpimente/test-images:multi-arch-test"
     - name: PREFETCH_INPUT
-      value: "npm"
+      value: "pip"
     - name: TARGET_ARTIFACT
       value: "quay.io/bpimente/test-images"
   taskRunTemplate:

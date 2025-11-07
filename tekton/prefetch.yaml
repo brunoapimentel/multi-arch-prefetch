@@ -6,6 +6,9 @@ metadata:
 spec:
   description: Prefetch build dependencies using Hermeto and push as artifacts
   params:
+    - name: PLATFORM
+      description: The target architecture for which the prefetch will be executed
+      type: string
     - name: SOURCE_ARTIFACT
       description: The Trusted Artifact URI pointing to the artifact with the application source code
       type: string
@@ -16,11 +19,8 @@ spec:
       description: The OCI repository where the artifacts will be stored
       type: string
   results:
-    - name: PREFETCH_ARTIFACT
-      description: The Trusted Artifact URI pointing to the artifact with the prefetched dependencies
-      type: string
-    - name: SOURCE_ARTIFACT
-      description: The Trusted Artifact URI pointing to the artifact with the modified source code
+    - name: ARTIFACTS
+      description: JSON object containing both source_artifact and prefetch_artifact URIs
       type: string
   volumes:
     - name: workdir
@@ -55,8 +55,26 @@ spec:
         - create
         - --store
         - $(params.TARGET_ARTIFACT)
-        - $(results.SOURCE_ARTIFACT.path)=/var/workdir/source
-        - $(results.PREFETCH_ARTIFACT.path)=/var/workdir/prefetch
+        - /var/workdir/result-source-artifact=/var/workdir/source
+        - /var/workdir/result-prefetch-artifact=/var/workdir/prefetch
+      volumeMounts:
+        - mountPath: /var/workdir
+          name: workdir
+    # This task will emit a singe JSON result containing the architecture that was used for the prefetch and the URLs for artifacts.
+    # It is meant to be used in a matrix, so that the results will end up in an array.
+    - name: emit-result
+      image: quay.io/konflux-ci/build-trusted-artifacts:latest@sha256:aa601d847eafa87747894b770eff43b47cffe2cc39059bb345ee58b378473b8f
+      env:
+        - name: PARAM_PLATFORM
+          value: $(params.PLATFORM)
+      script: |
+        #!/bin/sh
+        set -ex
+
+        SOURCE_ARTIFACT=$(cat /var/workdir/result-source-artifact)
+        PREFETCH_ARTIFACT=$(cat /var/workdir/result-prefetch-artifact)
+
+        echo "{\"platform\": \"${PARAM_PLATFORM}\", \"source_artifact\": \"${SOURCE_ARTIFACT}\", \"prefetch_artifact\": \"${PREFETCH_ARTIFACT}\"}" > $(results.ARTIFACTS.path)
       volumeMounts:
         - mountPath: /var/workdir
           name: workdir

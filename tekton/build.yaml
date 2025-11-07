@@ -6,11 +6,8 @@ metadata:
 spec:
   description: Build container image using source code and prefetched dependencies
   params:
-    - name: SOURCE_ARTIFACT
-      description: The Trusted Artifact URI pointing to the artifact with the cloned files
-      type: string
-    - name: PREFETCH_ARTIFACT
-      description: The Trusted Artifact URI pointing to the artifact with the prefetched files
+    - name: ARTIFACTS
+      description: JSON object containing source_artifact and prefetch_artifact URIs from prefetch task
       type: string
     - name: IMAGE
       description: Reference of the image buildah will produce
@@ -24,12 +21,34 @@ spec:
     - name: workdir
       emptyDir: {}
   steps:
+    - name: parse-artifacts
+      image: quay.io/konflux-ci/buildah-task:latest@sha256:27400eaf836985bcc35182d62d727629f061538f61603c05b85d5d99bfa7da2d
+      env:
+        - name: PARAM_ARTIFACTS
+          value: $(params.ARTIFACTS)
+      script: |
+        #!/bin/sh
+        set -ex
+
+        # This task will receive a single JSON object as the artifact and split the contents using jq
+        # Each key will then be shared among the other steps of this task via files on the volumeMount
+        echo $PARAM_ARTIFACTS | jq -r ".source_artifact" > /var/workdir/source-artifact-uri
+        echo $PARAM_ARTIFACTS | jq -r ".prefetch_artifact" > /var/workdir/prefetch-artifact-uri
+        echo $PARAM_ARTIFACTS | jq -r ".platform" > /var/workdir/platform-string
+      volumeMounts:
+        - mountPath: /var/workdir
+          name: workdir
     - name: use-trusted-artifact
       image: quay.io/konflux-ci/build-trusted-artifacts:latest@sha256:43d997ac61bef77eaee0413fe50c29b66eb4d0d32066f5bd4a83f39e4b2d9457
-      args:
-        - use
-        - $(params.SOURCE_ARTIFACT)=/var/workdir/source
-        - $(params.PREFETCH_ARTIFACT)=/var/workdir/prefetch
+      script: |
+        #!/bin/sh
+        set -ex
+
+        SOURCE_ARTIFACT=$(cat /var/workdir/source-artifact-uri)
+        PREFETCH_ARTIFACT=$(cat /var/workdir/prefetch-artifact-uri)
+        /usr/local/bin/entrypoint use \
+          "$SOURCE_ARTIFACT=/var/workdir/source" \
+          "$PREFETCH_ARTIFACT=/var/workdir/prefetch"
       volumeMounts:
         - mountPath: /var/workdir
           name: workdir
@@ -40,10 +59,6 @@ spec:
           name: workdir
       workingDir: /var/workdir/source
       env:
-        - name: PARAM_SOURCE_ARTIFACT
-          value: $(params.SOURCE_ARTIFACT)
-        - name: PARAM_PREFETCH_ARTIFACT
-          value: $(params.PREFETCH_ARTIFACT)
         - name: PARAM_IMAGE
           value: $(params.IMAGE)
         - name: PARAM_DOCKERFILE
@@ -60,6 +75,12 @@ spec:
         #!/bin/sh
         set -ex
 
+        # Append the platform to the image URL
+        PLATFORM=$(cat /var/workdir/platform-string | sed "s/linux\///")
+        IMAGE_WITH_ARCH="$PARAM_IMAGE-$PLATFORM"
+        echo $IMAGE_WITH_ARCH > /var/workdir/image-with-arch-string
+
+        # Copy the dockerfile and inject the command that sources the prefetch env
         dockerfile_path=$PARAM_DOCKERFILE
         dockerfile_copy=$(mktemp --tmpdir "$(basename "$dockerfile_path").XXXXXX")
         cp "$dockerfile_path" "$dockerfile_copy"
@@ -69,12 +90,14 @@ spec:
           -e 's@^\s*(run((\s|\\\n)+-\S+)*(\s|\\\n)+)@\1. /prefetch/prefetch.env \&\& \\\n    @igM' \
           "$dockerfile_copy"
 
+        # Mount the prefetched content
         VOLUME_MOUNTS=()
 
         cp -r "$PREFETCH_PATH" /tmp/
         chmod -R go+rwX /tmp/prefetch
         VOLUME_MOUNTS+=(--volume /tmp/prefetch:/prefetch)
 
+        # Build with network isonlation
         buildah_cmd_array=(
           buildah build
           "${VOLUME_MOUNTS[@]}"
@@ -83,27 +106,25 @@ spec:
           --ulimit nofile=4096:4096
           --http-proxy=false
           --network=none
-          -f "$dockerfile_copy" -t "$PARAM_IMAGE" .
+          -f "$dockerfile_copy" -t "$IMAGE_WITH_ARCH" .
         )
 
         buildah_cmd=$(printf "%q " "${buildah_cmd_array[@]}")
 
         $buildah_cmd
 
+        # Push the built image
         buildah push \
         --format=docker \
         --retry 3 \
         --tls-verify=true \
-        "$PARAM_IMAGE"
+        "$IMAGE_WITH_ARCH"
     
     - name: push-sbom
       image: quay.io/konflux-ci/appstudio-utils:1610c1fc4cfc9c9053dbefc1146904a4df6659ef@sha256:90ac97b811073cb99a23232c15a08082b586c702b85da6200cf54ef505e3c50c
-      env:
-        - name: PARAM_IMAGE
-          value: $(params.IMAGE)
       volumeMounts:
         - mountPath: /var/workdir
           name: workdir
       script: |
-        ls /var/workdir/prefetch
-        cosign attach sbom --sbom /var/workdir/prefetch/output/bom.json --type "spdx" "$PARAM_IMAGE"
+        IMAGE_WITH_ARCH=$(cat /var/workdir/image-with-arch-string)
+        cosign attach sbom --sbom /var/workdir/prefetch/output/bom.json --type "spdx" "$IMAGE_WITH_ARCH"

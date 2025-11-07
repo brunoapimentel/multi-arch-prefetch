@@ -21,6 +21,13 @@ spec:
     - name: TARGET_ARTIFACT
       description: The OCI repository where the artifacts will be stored
       type: string
+    - name: BUILD_PLATFORMS
+      description: The target platforms on which the build will be performed
+      type: array
+      default:
+        - linux/x86_64
+        - linux/arm64
+        - linux/s390x
   tasks:
     - name: clone
       taskRef:
@@ -33,6 +40,11 @@ spec:
         - name: TARGET_ARTIFACT
           value: $(params.TARGET_ARTIFACT)
     - name: prefetch
+      matrix:
+        params:
+          - name: PLATFORM
+            value:
+              - $(params.BUILD_PLATFORMS)
       taskRef:
         name: prefetch-dependencies
       params:
@@ -45,13 +57,14 @@ spec:
       runAfter:
         - clone
     - name: build
+      matrix:
+        params:
+          - name: ARTIFACTS
+            value:
+              - $(tasks.prefetch.results.ARTIFACTS[*])
       taskRef:
         name: build
       params:
-        - name: SOURCE_ARTIFACT
-          value: $(tasks.prefetch.results.SOURCE_ARTIFACT)
-        - name: PREFETCH_ARTIFACT
-          value: $(tasks.prefetch.results.PREFETCH_ARTIFACT)
         - name: IMAGE
           value: $(params.IMAGE)
       runAfter:
