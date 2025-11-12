@@ -12,9 +12,9 @@ spec:
     - name: SOURCE_ARTIFACT
       description: The Trusted Artifact URI pointing to the artifact with the application source code
       type: string
-    - name: PREFETCH_INPUT
+    - name: PREFETCH_INPUTS
       description: Configures project packages that will have their dependencies prefetched
-      type: string
+      type: array
     - name: TARGET_ARTIFACT
       description: The OCI repository where the artifacts will be stored
       type: string
@@ -35,15 +35,30 @@ spec:
         - mountPath: /var/workdir
           name: workdir
     - name: prefetch-dependencies
-      image: quay.io/konflux-ci/hermeto:0.41.0@sha256:c0c77f44407a094bbeccc9861b83ef0e7cd14220227d6842cd9a2ce1c8d98eaa
+      image: quay.io/bpimente/test-images:hermeto-latest
       env:
-        - name: PARAM_PREFETCH_INPUT
-          value: $(params.PREFETCH_INPUT)
+        - name: PARAM_PLATFORM
+          value: $(params.PLATFORM)
+      args:
+        - $(params.PREFETCH_INPUTS[*])
       script: |
         #!/bin/sh
         set -ex
 
-        hermeto fetch-deps --source="/var/workdir/source" --output="/var/workdir/prefetch/output" --sbom-output-type="spdx" "${PARAM_PREFETCH_INPUT}"
+        # Iterate over all arguments passed
+        for input in "$@"; do
+          arch=$(echo "$input" | jq -r ".platform")
+          if [ "$arch" = "$PARAM_PLATFORM" ]; then
+            SELECTED_INPUT=$(echo "$input" | jq -r ".input")
+          fi
+        done
+
+        if [ -z "$SELECTED_INPUT" ]; then
+          echo "ERROR: No prefetch input found for platform: $PARAM_PLATFORM" >&2
+          exit 1
+        fi
+
+        hermeto fetch-deps --source="/var/workdir/source" --output="/var/workdir/prefetch/output" --sbom-output-type="spdx" "${SELECTED_INPUT}"
         hermeto generate-env "/var/workdir/prefetch/output" --format env --for-output-dir=/prefetch/output --output "/var/workdir/prefetch/prefetch.env"
         hermeto inject-files "/var/workdir/prefetch/output" --for-output-dir=/prefetch/output
       volumeMounts:

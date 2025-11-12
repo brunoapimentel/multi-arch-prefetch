@@ -8,7 +8,7 @@ spec:
     name: hermetic-build
   params:
     - name: URL
-      value: "https://github.com/brunoapimentel/pip-cryptography-sample"
+      value: "https://github.com/brunoapimentel/pip-cryptography-sample.git"
     - name: REF
       value: "main"
     - name: IMAGE
@@ -17,5 +17,15 @@ spec:
       value: "pip"
     - name: TARGET_ARTIFACT
       value: "quay.io/bpimente/test-images"
+    - name: PLATFORMS
+      value:
+        - linux/x86_64
+        - linux/arm64
+        - linux/s390x
+    - name: PREFETCH_INPUTS
+      value:
+        - '{"platform": "linux/x86_64", "input": {"type": "pip", "binary": {"os": "manylinux", "py_version": "311", "arch": "x86_64"}}}'
+        - '{"platform": "linux/arm64", "input": {"type": "pip", "binary": {"os": "manylinux", "py_version": "311", "arch": "aarch64"}}}'
+        - '{"platform": "linux/s390x", "input": {"type": "pip", "binary": {"os": "manylinux", "py_version": "311", "arch": "s390x"}}}'
   taskRunTemplate:
     serviceAccountName: registry-credentials

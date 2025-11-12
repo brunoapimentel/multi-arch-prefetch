@@ -6,9 +6,12 @@ metadata:
 spec:
   description: Build container image using source code and prefetched dependencies
   params:
+    - name: PLATFORM
+      description: The target platform on which the build will be performed
+      type: string
     - name: ARTIFACTS
       description: JSON object containing source_artifact and prefetch_artifact URIs from prefetch task
-      type: string
+      type: array
     - name: IMAGE
       description: Reference of the image buildah will produce
       type: string
@@ -23,18 +26,32 @@ spec:
   steps:
     - name: parse-artifacts
       image: quay.io/konflux-ci/buildah-task:latest@sha256:27400eaf836985bcc35182d62d727629f061538f61603c05b85d5d99bfa7da2d
+      args:
+        - $(params.ARTIFACTS[*])
       env:
-        - name: PARAM_ARTIFACTS
-          value: $(params.ARTIFACTS)
+        - name: PARAM_PLATFORM
+          value: $(params.PLATFORM)
       script: |
         #!/bin/sh
         set -ex
 
-        # This task will receive a single JSON object as the artifact and split the contents using jq
-        # Each key will then be shared among the other steps of this task via files on the volumeMount
-        echo $PARAM_ARTIFACTS | jq -r ".source_artifact" > /var/workdir/source-artifact-uri
-        echo $PARAM_ARTIFACTS | jq -r ".prefetch_artifact" > /var/workdir/prefetch-artifact-uri
-        echo $PARAM_ARTIFACTS | jq -r ".platform" > /var/workdir/platform-string
+        # This taskRun will receive a list of JSON objects and needs to find, based on the platform param, which one is appliable.
+        # The keys will then be split and shared among the other steps via files on the volumeMount.
+        for artifact in "$@"; do
+          arch=$(echo "$artifact" | jq -r ".platform")
+          if [ "$arch" = "$PARAM_PLATFORM" ]; then
+            SELECTED_ARTIFACT="$artifact"
+          fi
+        done
+
+        if [ -z "$SELECTED_ARTIFACT" ]; then
+          echo "ERROR: No prefetch artifacts found for platform: $PARAM_PLATFORM" >&2
+          exit 1
+        fi
+
+        echo $SELECTED_ARTIFACT | jq -r ".source_artifact" > /var/workdir/source-artifact-uri
+        echo $SELECTED_ARTIFACT | jq -r ".prefetch_artifact" > /var/workdir/prefetch-artifact-uri
+        echo $SELECTED_ARTIFACT | jq -r ".platform" > /var/workdir/platform-string
       volumeMounts:
         - mountPath: /var/workdir
           name: workdir
@@ -67,6 +84,8 @@ spec:
           value: /var/workdir/prefetch
         - name: SOURCE_PATH
           value: /var/workdir/source
+        - name: PARAM_PLATFORM
+          value: $(params.PLATFORM)
       securityContext:
         capabilities:
           add:
@@ -74,6 +93,15 @@ spec:
       script: |
         #!/bin/sh
         set -ex
+
+        echo "Building for $PARAM_PLATFORM"
+        echo "Using artifact $(cat /var/workdir/prefetch-artifact-uri)"
+        echo "Prefetched content: "
+        find "$PREFETCH_PATH"
+        if [ "$PARAM_PLATFORM" != "linux/x86_64" ]; then
+          echo "Skipping build since this architecture is not available"
+          exit 0
+        fi
 
         # Append the platform to the image URL
         PLATFORM=$(cat /var/workdir/platform-string | sed "s/linux\///")
@@ -126,5 +154,12 @@ spec:
         - mountPath: /var/workdir
           name: workdir
       script: |
-        IMAGE_WITH_ARCH=$(cat /var/workdir/image-with-arch-string)
-        cosign attach sbom --sbom /var/workdir/prefetch/output/bom.json --type "spdx" "$IMAGE_WITH_ARCH"
+        #!/bin/sh
+        set -ex
+
+        IMAGE_WITH_ARCH_PATH="/var/workdir/image-with-arch-string"
+
+        if [ -f "$IMAGE_WITH_ARCH_PATH" ]; then
+          IMAGE_WITH_ARCH=$(cat "$IMAGE_WITH_ARCH_PATH")
+          cosign attach sbom --sbom /var/workdir/prefetch/output/bom.json --type "spdx" "$IMAGE_WITH_ARCH"
+        fi

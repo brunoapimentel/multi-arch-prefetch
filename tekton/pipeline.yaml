@@ -15,19 +15,15 @@ spec:
     - name: IMAGE
       description: Reference of the image buildah will produce
       type: string
-    - name: PREFETCH_INPUT
-      description: Configures project packages that will have their dependencies prefetched
-      type: string
     - name: TARGET_ARTIFACT
       description: The OCI repository where the artifacts will be stored
       type: string
-    - name: BUILD_PLATFORMS
+    - name: PLATFORMS
       description: The target platforms on which the build will be performed
       type: array
-      default:
-        - linux/x86_64
-        - linux/arm64
-        - linux/s390x
+    - name: PREFETCH_INPUTS
+      description: Configures project packages that will have their dependencies prefetched
+      type: array
   tasks:
     - name: clone
       taskRef:
@@ -44,14 +40,17 @@ spec:
         params:
           - name: PLATFORM
             value:
-              - $(params.BUILD_PLATFORMS)
+              - $(params.PLATFORMS)
       taskRef:
         name: prefetch-dependencies
       params:
         - name: SOURCE_ARTIFACT
           value: $(tasks.clone.results.SOURCE_ARTIFACT)
-        - name: PREFETCH_INPUT
-          value: $(params.PREFETCH_INPUT)
+        # Because of Tekton limitations, the inputs for all archs need to be passed here.
+        # Choosing the right one based on the architecture will be done inside the Task.
+        - name: PREFETCH_INPUTS
+          value:
+            - $(params.PREFETCH_INPUTS[*])
         - name: TARGET_ARTIFACT
           value: $(params.TARGET_ARTIFACT)
       runAfter:
@@ -59,12 +58,15 @@ spec:
     - name: build
       matrix:
         params:
-          - name: ARTIFACTS
+          - name: PLATFORM
             value:
-              - $(tasks.prefetch.results.ARTIFACTS[*])
+              - $(params.PLATFORMS[*])
       taskRef:
         name: build
       params:
+        - name: ARTIFACTS
+          value:
+            - $(tasks.prefetch.results.ARTIFACTS[*])
         - name: IMAGE
           value: $(params.IMAGE)
       runAfter:
