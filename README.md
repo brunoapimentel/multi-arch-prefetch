@@ -22,3 +22,7 @@
     ```
     kubectl create -f pipeline-run.yaml
     ```
+
+## Results of the preliminary investigation
+
+See the [investigation document](./INVESTIGATION.md).
